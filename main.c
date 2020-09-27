@@ -74,15 +74,15 @@
 /* Buffer and packet size */
 #define PACKET_SIZE             (3UL)
 
+
 /***************************************
 *          Global Variables
 ****************************************/
+#if ((I2C_MODE == I2C_MODE_BOTH) || (I2C_MODE == I2C_MODE_SLAVE))
+cyhal_i2c_t sI2C;
 uint8_t i2c_slave_read_buffer[PACKET_SIZE];
 uint8_t i2c_slave_write_buffer[PACKET_SIZE] = {PACKET_SOP, STS_CMD_FAIL, PACKET_EOP};
-cyhal_i2c_t mI2C;
-cyhal_i2c_cfg_t mI2C_cfg;
-cyhal_i2c_t sI2C;
-cyhal_i2c_cfg_t sI2C_cfg;
+#endif
 
 /*******************************************************************************
 * Function Name: handle_error
@@ -105,6 +105,7 @@ void handle_error(void)
     CY_ASSERT(0);
 }
 
+#if ((I2C_MODE == I2C_MODE_BOTH) || (I2C_MODE == I2C_MODE_SLAVE))
 /*******************************************************************************
 * Function Name: handle_slave_event
 ********************************************************************************
@@ -152,6 +153,7 @@ void handle_slave_event(void *callback_arg, cyhal_i2c_event_t event)
         }
     }
 }
+#endif
 
 /*******************************************************************************
 * Function Name: main
@@ -191,6 +193,7 @@ int main(void)
     printf("PSoC 6 MCU I2C Master\r\n");
     printf("**************************\r\n\n");
 
+#if ((I2C_MODE == I2C_MODE_BOTH) || (I2C_MODE == I2C_MODE_SLAVE))
     /* Configure user LED */
     printf(">> Configuring user LED..... ");
     result = cyhal_gpio_init( CYBSP_USER_LED, CYHAL_GPIO_DIR_OUTPUT, 
@@ -201,22 +204,7 @@ int main(void)
     }
     printf("Done\r\n");
 
-    /* Configure I2C Master */
-    printf(">> Configuring I2C master..... ");
-    mI2C_cfg.is_slave = false;
-    mI2C_cfg.address = 0;
-    mI2C_cfg.frequencyhal_hz = I2C_FREQ;
-    result = cyhal_i2c_init( &mI2C, mI2C_SDA, mI2C_SCL, NULL);
-    if (result != CY_RSLT_SUCCESS)
-    {
-        handle_error();
-    }
-    result = cyhal_i2c_configure( &mI2C, &mI2C_cfg);
-    if (result != CY_RSLT_SUCCESS)
-    {
-        handle_error();
-    }
-    printf("Done\r\n");
+    cyhal_i2c_cfg_t sI2C_cfg;
 
     /* Configure I2C Slave */
     printf(">> Configuring I2C Slave..... ");
@@ -233,7 +221,7 @@ int main(void)
     {
         handle_error();
     }
-    printf("Done\r\n\n");
+    printf("Done\r\n");
 
     cyhal_i2c_slave_config_write_buff( &sI2C, i2c_slave_write_buffer, PACKET_SIZE);
     cyhal_i2c_slave_config_read_buff( &sI2C, i2c_slave_read_buffer, PACKET_SIZE);
@@ -243,28 +231,53 @@ int main(void)
                            | CYHAL_I2C_SLAVE_RD_CMPLT_EVENT 
                            | CYHAL_I2C_SLAVE_ERR_EVENT),    
                            I2C_SLAVE_IRQ_PRIORITY, true);
+#endif
 
+#if ((I2C_MODE == I2C_MODE_BOTH) || (I2C_MODE == I2C_MODE_MASTER))
+    cyhal_i2c_t mI2C;
+    cyhal_i2c_cfg_t mI2C_cfg;
     uint8_t cmd = CYBSP_LED_STATE_ON;
     uint8_t buffer[PACKET_SIZE];
+
+    /* Configure I2C Master */
+    printf(">> Configuring I2C Master..... ");
+    mI2C_cfg.is_slave = false;
+    mI2C_cfg.address = 0;
+    mI2C_cfg.frequencyhal_hz = I2C_FREQ;
+    result = cyhal_i2c_init( &mI2C, mI2C_SDA, mI2C_SCL, NULL);
+    if (result != CY_RSLT_SUCCESS)
+    {
+        handle_error();
+    }
+    result = cyhal_i2c_configure( &mI2C, &mI2C_cfg);
+    if (result != CY_RSLT_SUCCESS)
+    {
+        handle_error();
+    }
+    printf("Done\r\n\n");
+#endif
 
     /* Enable interrupts */
     __enable_irq();
  
+#if ((I2C_MODE == I2C_MODE_BOTH) || (I2C_MODE == I2C_MODE_SLAVE))
     printf("User LED should start blinking \r\n");
+#endif
 
     for (;;)
     {
+#if ((I2C_MODE == I2C_MODE_BOTH) || (I2C_MODE == I2C_MODE_MASTER))
         /* create packet to be sent to slave.  */
         buffer[PACKET_SOP_POS] = PACKET_SOP;
         buffer[PACKET_EOP_POS] = PACKET_EOP;
         buffer[PACKET_CMD_POS] = cmd;
 
         /* Send packet with command to the slave. */
-        if (CY_RSLT_SUCCESS == cyhal_i2c_master_write( &mI2C, I2C_SLAVE_ADDR, 
+        if (CY_RSLT_SUCCESS == cyhal_i2c_master_write( &mI2C, I2C_SLAVE_ADDR,
                                                   buffer, PACKET_SIZE, 0, true))
         {
             /* Read response packet from the slave. */
-            if (CY_RSLT_SUCCESS == cyhal_i2c_master_read( &mI2C, I2C_SLAVE_ADDR, 
+            if (CY_RSLT_SUCCESS == cyhal_i2c_master_read( &mI2C, I2C_SLAVE_ADDR,
                                                  buffer, PACKET_SIZE , 0, true))
             {
                 /* Check packet structure and status */
@@ -273,7 +286,7 @@ int main(void)
                    (STS_CMD_DONE == buffer[PACKET_CMD_POS]))
                     {
                         /* Next command to be written. */
-                        cmd = (cmd == CYBSP_LED_STATE_ON) ? 
+                        cmd = (cmd == CYBSP_LED_STATE_ON) ?
                                CYBSP_LED_STATE_OFF : CYBSP_LED_STATE_ON;
                     }
                 else
@@ -285,5 +298,6 @@ int main(void)
             /* Give delay between commands. */
             cyhal_system_delay_ms(CMD_TO_CMD_DELAY);
         }
+#endif
     }
 }
