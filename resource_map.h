@@ -75,6 +75,9 @@
     #elif defined (TARGET_CYW9P62S1_43012EVB_01)
         #define mI2C_SCL                (P0_2)
         #define mI2C_SDA                (P0_3)
+    #elif defined (TARGET_CY8CKIT_062S4)
+        #define mI2C_SCL                (P10_0)
+        #define mI2C_SDA                (P10_1)
     #elif defined (TARGET_CY8CKIT_062S2_43012)   || \
           defined (TARGET_CYW9P62S1_43438EVB_01) || \
           defined (TARGET_CY8CKIT_062_BLE)       || \
