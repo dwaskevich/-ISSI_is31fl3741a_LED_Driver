@@ -86,7 +86,9 @@
           defined (TARGET_CY8CPROTO_062_4343W)   || \
           defined (TARGET_CY8CKIT_064B0S2_4343W) || \
           defined (TARGET_CYSBSYSKIT_01)         || \
-          defined (TARGET_CYSBSYSKIT_DEV_01)
+          defined (TARGET_CYSBSYSKIT_DEV_01)     || \
+          defined (TARGET_CY8CEVAL_062S2)        || \
+          defined (TARGET_CY8CEVAL_062S2_LAI_4373M2)
         #define mI2C_SCL                (P9_0)
         #define mI2C_SDA                (P9_1)
     #else
