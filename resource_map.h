@@ -53,7 +53,7 @@
 #define I2C_MODE_MASTER  1
 #define I2C_MODE_SLAVE   2
 
-#define I2C_MODE                    (I2C_MODE_MASTER)
+#define I2C_MODE                    (I2C_MODE_BOTH)
 
 #if (I2C_MODE == I2C_MODE_MASTER)
     #define mI2C_SCL                    (CYBSP_I2C_SCL)

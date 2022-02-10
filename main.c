@@ -5,8 +5,36 @@
 * I2C resource as Master using HAL APIs. The I2C master sends the
 * command packets to the I2C slave to control an user LED.
 *
-* Related Document: See README.md
+* Update 6-Nov-2021 (DJJW):
+*		- Created new project (ISSI_LED_Matrix)
+*			- Used Quick Launch "New Application"
+*		- Added I2C Master code from github (https://github.com/Infineon/mtb-example-psoc6-i2c-master.git)
+*		- Adapting ISSI S31FL3741A-QFLS4 driver from https://git.alt-tek.com/nathan/qmk-fw
+*		- Instantiating and initializing I2C Master (MDriver) with HAL
+*			- Must disable the MDriver SCB peripheral in Device Configurator to use HAL
 *
+* Update 9-Nov-2021 (DJJW):
+*		- Abandoning qmk S31FL3741A driver (but borrowing #defines)
+*		- Replaced/added base driver functions
+*		- Adding turn-on effects
+*
+* Update 14-Nov-2021 (DJJW):
+*		- completed s31fl3741a init/writeLED/readLED/toggleLED functions
+*			- added macros for set/clear LED
+*			- uses hardware-independent calls to i2c_transmit and i2c_receive
+*		- completed i2c_master .c and .h files
+*			- this is where hardware-specific i2c transmit and receive functions are defined
+*			- uses HAL I2C SCB object (MDriverI2C)
+*		- increased I2C bus speed to 1MHz (tested ok)
+*		- added low-level s31fl3741a unlock, writeRegister and readRegister functions
+*			- modified writeLED/readLED/toggleLED functions to use the new low-level functions
+*
+* Update 15-Nov-2021 (DJJW):
+*		- completed more of the s31fl3741a functions
+*		- cleaned up s31fl3741a init using helper functions
+*		- cleaned up runEffects using newly created functions
+*
+* Related Document: See README.md
 *
 *******************************************************************************
 * Copyright 2019-2021, Cypress Semiconductor Corporation (an Infineon company) or
@@ -46,45 +74,33 @@
 #include "cybsp.h"
 #include "cy_retarget_io.h"
 #include "resource_map.h"
+#include "s31fl3741a.h"
 
 /***************************************
 *            Constants
 ****************************************/
-#define CMD_TO_CMD_DELAY        (1000UL)
-#define PACKET_SOP_POS          (0UL)
-#define PACKET_CMD_POS          (1UL)
-#define PACKET_EOP_POS          (2UL)
-#define PACKET_STS_POS          (1UL)
-
-/* Start and end of packet markers */
-#define PACKET_SOP              (0x01UL)
-#define PACKET_EOP              (0x17UL)
-
-/* I2C slave address to communicate with */
-#define I2C_SLAVE_ADDR          (0x24UL)
+/* enable or disable features */
+#define DISCOVER_I2C_SLAVES		(1u)
 
 /* I2C bus frequency */
-#define I2C_FREQ                (400000UL)
+#define I2C_FREQ                (1000000UL)
 
-/* I2C slave interrupt priority */
-#define I2C_SLAVE_IRQ_PRIORITY  (7u)
+/* define MDriver I2C Master pins on hardware */
+#define MDriverI2C_SCL			(P2_0)
+#define MDriverI2C_SDA			(P2_1)
 
-/* Command valid status */
-#define STS_CMD_DONE            (0x00UL)
-#define STS_CMD_FAIL            (0xFFUL)
-
-/* Buffer and packet size */
-#define PACKET_SIZE             (3UL)
-
+/*******************************************************************************
+* Function Prototypes
+*******************************************************************************/
+cy_rslt_t runEffects(void);
 
 /***************************************
 *          Global Variables
 ****************************************/
-#if ((I2C_MODE == I2C_MODE_BOTH) || (I2C_MODE == I2C_MODE_SLAVE))
-cyhal_i2c_t sI2C;
-uint8_t i2c_slave_read_buffer[PACKET_SIZE];
-uint8_t i2c_slave_write_buffer[PACKET_SIZE] = {PACKET_SOP, STS_CMD_FAIL, PACKET_EOP};
-#endif
+/* HAL I2C SCB object */
+cyhal_i2c_t MDriverI2C;
+cyhal_i2c_cfg_t MDriverI2C_cfg;
+
 
 /*******************************************************************************
 * Function Name: handle_error
@@ -107,55 +123,6 @@ void handle_error(void)
     CY_ASSERT(0);
 }
 
-#if ((I2C_MODE == I2C_MODE_BOTH) || (I2C_MODE == I2C_MODE_SLAVE))
-/*******************************************************************************
-* Function Name: handle_slave_event
-********************************************************************************
-* Summary:
-* This is a callback function for I2C slave events. If a write event occurs, 
-* the command packet is verified and executed.
-*
-* Parameters:
-*  callback_arg : extra argument that can be passed to callback
-*  event        : I2C event
-*
-* Return:
-*  void
-*
-*******************************************************************************/
-void handle_slave_event(void *callback_arg, cyhal_i2c_event_t event)
-{
-    if (0UL == (CYHAL_I2C_SLAVE_ERR_EVENT & event))
-    {
-        if (0UL != (CYHAL_I2C_SLAVE_WR_CMPLT_EVENT & event))
-        {   
-            /* Check start and end of packet markers. */
-            if ((i2c_slave_read_buffer[PACKET_SOP_POS] == PACKET_SOP) &&
-                (i2c_slave_read_buffer[PACKET_EOP_POS] == PACKET_EOP))
-                {
-                    /* Execute command */
-                    cyhal_gpio_write( CYBSP_USER_LED, 
-                    i2c_slave_read_buffer[PACKET_CMD_POS]);
-                    
-                    /* Update status of received command. */
-                    i2c_slave_write_buffer[PACKET_STS_POS] = STS_CMD_DONE;
-                }
-            
-            /* Configure read buffer for the next write */
-            i2c_slave_read_buffer[PACKET_SOP_POS] = 0;
-            i2c_slave_read_buffer[PACKET_EOP_POS] = 0;
-            cyhal_i2c_slave_config_read_buff(&sI2C, i2c_slave_read_buffer, PACKET_SIZE);
-        }
-            
-        if (0UL != (CYHAL_I2C_SLAVE_RD_CMPLT_EVENT & event))
-        {
-            /* Configure write buffer for the next read */
-            i2c_slave_write_buffer[PACKET_STS_POS] = STS_CMD_FAIL;
-            cyhal_i2c_slave_config_write_buff(&sI2C, i2c_slave_write_buffer, PACKET_SIZE);
-        }
-    }
-}
-#endif
 
 /*******************************************************************************
 * Function Name: main
@@ -175,6 +142,9 @@ void handle_slave_event(void *callback_arg, cyhal_i2c_event_t event)
 int main(void)
 {
     cy_rslt_t result;
+
+    uint8_t buffer[8];
+
     /* Set up the device based on configurator selections */
     result = cybsp_init();
     if (result != CY_RSLT_SUCCESS)
@@ -191,11 +161,11 @@ int main(void)
     /* \x1b[2J\x1b[;H - ANSI ESC sequence for clear screen */
     printf("\x1b[2J\x1b[;H");
 
-    printf("**************************\r\n");
-    printf("PSoC 6 MCU I2C Master\r\n");
-    printf("**************************\r\n\n");
+    printf("************************************************\r\n");
+    printf("PSoC 6 MCU I2C Master - discover slave addresses\r\n");
+    printf("************************************************\r\n\n");
 
-#if ((I2C_MODE == I2C_MODE_BOTH) || (I2C_MODE == I2C_MODE_SLAVE))
+
     /* Configure user LED */
     printf(">> Configuring user LED..... ");
     result = cyhal_gpio_init( CYBSP_USER_LED, CYHAL_GPIO_DIR_OUTPUT, 
@@ -206,100 +176,110 @@ int main(void)
     }
     printf("Done\r\n");
 
-    cyhal_i2c_cfg_t sI2C_cfg;
+	/* djjw - initialize and configure I2C Master SCB (borrowed from github I2C Master code example) */
+    MDriverI2C_cfg.is_slave = false;
+    MDriverI2C_cfg.address = 0;
+    MDriverI2C_cfg.frequencyhal_hz = I2C_FREQ;
 
-    /* Configure I2C Slave */
-    printf(">> Configuring I2C Slave..... ");
-    sI2C_cfg.is_slave = true;
-    sI2C_cfg.address = I2C_SLAVE_ADDR;
-    sI2C_cfg.frequencyhal_hz = I2C_FREQ;
-    result = cyhal_i2c_init( &sI2C, sI2C_SDA, sI2C_SCL, NULL);
-    if (result != CY_RSLT_SUCCESS)
-    {
-        handle_error();
-    }
-    result = cyhal_i2c_configure(&sI2C, &sI2C_cfg);
-    if (result != CY_RSLT_SUCCESS)
-    {
-        handle_error();
-    }
-    printf("Done\r\n");
+	result = cyhal_i2c_init(&MDriverI2C, MDriverI2C_SDA, MDriverI2C_SCL, NULL);
+	result = cyhal_i2c_configure(&MDriverI2C, &MDriverI2C_cfg);
 
-    cyhal_i2c_slave_config_write_buff( &sI2C, i2c_slave_write_buffer, PACKET_SIZE);
-    cyhal_i2c_slave_config_read_buff( &sI2C, i2c_slave_read_buffer, PACKET_SIZE);
-    cyhal_i2c_register_callback( &sI2C, handle_slave_event, NULL);
-    cyhal_i2c_enable_event( &sI2C,
-                            (CYHAL_I2C_SLAVE_WR_CMPLT_EVENT 
-                           | CYHAL_I2C_SLAVE_RD_CMPLT_EVENT 
-                           | CYHAL_I2C_SLAVE_ERR_EVENT),    
-                           I2C_SLAVE_IRQ_PRIORITY, true);
-#endif
+	if (CYRET_SUCCESS != result)
+	{
+		/* Halt the CPU if CapSense initialization failed */
+		CY_ASSERT(0);
+	}
 
-#if ((I2C_MODE == I2C_MODE_BOTH) || (I2C_MODE == I2C_MODE_MASTER))
-    cyhal_i2c_t mI2C;
-    cyhal_i2c_cfg_t mI2C_cfg;
-    uint8_t cmd = CYBSP_LED_STATE_ON;
-    uint8_t buffer[PACKET_SIZE];
+	/* djjw - initialize ISSI IS31FL3741A LED Driver */
+	cyhal_gpio_init(P1_5, CYHAL_GPIO_DIR_OUTPUT, CYHAL_GPIO_DRIVE_STRONG, 0); /* disable while initializing */
 
-    /* Configure I2C Master */
-    printf(">> Configuring I2C Master..... ");
-    mI2C_cfg.is_slave = false;
-    mI2C_cfg.address = 0;
-    mI2C_cfg.frequencyhal_hz = I2C_FREQ;
-    result = cyhal_i2c_init( &mI2C, mI2C_SDA, mI2C_SCL, NULL);
-    if (result != CY_RSLT_SUCCESS)
-    {
-        handle_error();
-    }
-    result = cyhal_i2c_configure( &mI2C, &mI2C_cfg);
-    if (result != CY_RSLT_SUCCESS)
-    {
-        handle_error();
-    }
-    printf("Done\r\n\n");
-#endif
+	result = S31FL3741_init();
+
+	cyhal_gpio_write(P1_5, 1); /* enable LED matrix */
 
     /* Enable interrupts */
     __enable_irq();
- 
-#if ((I2C_MODE == I2C_MODE_BOTH) || (I2C_MODE == I2C_MODE_SLAVE))
-    printf("User LED should start blinking \r\n");
+
+#if DISCOVER_I2C_SLAVES
+
+    printf("Starting slave discovery .....\r\n\n");
+
+	for(uint8_t i = 1; i < 128; i++)
+	{
+		if(CY_RSLT_SUCCESS == cyhal_i2c_master_read(&MDriverI2C, i, buffer, 1, 100, true))
+		{
+			printf("Found device at address 0x%x\r\n", i);
+		}
+	}
+	printf("\nDiscovery complete\r\n\n");
+
 #endif
+
+	result = runEffects();
 
     for (;;)
     {
-#if ((I2C_MODE == I2C_MODE_BOTH) || (I2C_MODE == I2C_MODE_MASTER))
-        /* create packet to be sent to slave.  */
-        buffer[PACKET_SOP_POS] = PACKET_SOP;
-        buffer[PACKET_EOP_POS] = PACKET_EOP;
-        buffer[PACKET_CMD_POS] = cmd;
 
-        /* Send packet with command to the slave. */
-        if (CY_RSLT_SUCCESS == cyhal_i2c_master_write( &mI2C, I2C_SLAVE_ADDR,
-                                                  buffer, PACKET_SIZE, 0, true))
-        {
-            /* Read response packet from the slave. */
-            if (CY_RSLT_SUCCESS == cyhal_i2c_master_read( &mI2C, I2C_SLAVE_ADDR,
-                                                 buffer, PACKET_SIZE , 0, true))
-            {
-                /* Check packet structure and status */
-                if ((PACKET_SOP   == buffer[PACKET_SOP_POS]) &&
-                   (PACKET_EOP   == buffer[PACKET_EOP_POS]) &&
-                   (STS_CMD_DONE == buffer[PACKET_CMD_POS]))
-                    {
-                        /* Next command to be written. */
-                        cmd = (cmd == CYBSP_LED_STATE_ON) ?
-                               CYBSP_LED_STATE_OFF : CYBSP_LED_STATE_ON;
-                    }
-                else
-                    {
-                        handle_error();
-                    }
-            }
-
-            /* Give delay between commands. */
-            cyhal_system_delay_ms(CMD_TO_CMD_DELAY);
-        }
-#endif
     }
 }
+
+
+cy_rslt_t runEffects(void)
+{
+	cy_rslt_t result;
+
+	/* turn off all LEDs via global current control */
+	result = S31FL3741_setGlobalCurrent(0x00);
+
+	/* set all LEDs to max PWM value */
+	result = setAllMatrix(0xFF);
+
+	/* fade in LEDs using global current control */
+	for(uint16_t i = 0; i < 256; i++)
+	{
+		result = S31FL3741_setGlobalCurrent(i);
+		cyhal_system_delay_ms(6);
+	}
+
+	cyhal_system_delay_ms(1500);
+
+	/* fade out LEDs using global current control */
+	for(uint16_t i = 255; i > 0; i--)
+	{
+		S31FL3741_setGlobalCurrent(i);
+		cyhal_system_delay_ms(6);
+	}
+
+	/* extinguish all LEDs */
+	result = clearAllMatrix();
+
+	/* reset Global Current Control Register to 0xFF */
+	result = S31FL3741_setGlobalCurrent(0xFF);
+
+	/* cycle through lower LEDs */
+	for(uint16_t i = 0; i < PAGE_ZERO_BOUNDARY; i++)
+	{
+		result = writeLED(i, 0xFF);
+		cyhal_system_delay_ms(20);
+	}
+
+	cyhal_system_delay_ms(2000);
+
+	/* cycle through upper LEDs */
+	for(uint16_t i = 0; i < MAX_LEDS - PAGE_ZERO_BOUNDARY; i++)
+	{
+		result = writeLED(i + PAGE_ZERO_BOUNDARY, 0xFF);
+		cyhal_system_delay_ms(20);
+	}
+
+	cyhal_system_delay_ms(4000);
+
+	/* extinguish all LEDs */
+	result = clearAllMatrix();
+
+	cyhal_system_delay_ms(500);
+
+	return result;
+}
+
+/* [] END OF FILE */
