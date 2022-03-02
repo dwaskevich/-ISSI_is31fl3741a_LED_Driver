@@ -7,6 +7,12 @@
  *  Description: header for ISSI/Lumissil IS31F3741A led matrix driver
  *  			 - #defines borrowed from from https://git.alt-tek.com/nathan/qmk-fw
  *
+ * Update 27-Feb-2022 (DJJW):
+ *		- added PWM frequency setup parameters
+ *
+ * Update 1-Mar-2022 (DJJW):
+ *		- added writeAllMatrix function prototype
+ *
  */
 
 #ifndef S31FL3741A_H_
@@ -32,13 +38,17 @@ uint32_t writeGlobalLED(uint8_t *buffer, uint16_t length);
 uint32_t readLED(uint16_t ledPosition, uint8_t *pwmValue);
 uint32_t toggleLED(uint16_t ledPosition);
 uint32_t clearAllMatrix(void);
-uint32_t setAllMatrix(uint8_t pwmValue);
+uint32_t setAllMatrix(void);
+uint32_t writeAllMatrix(uint8_t pwmValue);
 
 /***********************************
  * Macros
  ***********************************/
 #define setLED(x)	(writeLED(x, 0xFF))
 #define clearLED(x)	(writeLED(x, 0))
+
+#define setLED_theme(x)		(writeLED(x, PWM_ON))
+#define clearLED_theme(x)	(writeLED(x, PWM_OFF))
 
 /* define S31FL3741A slave address (7-bit) */
 #define S31FL3741A_ADDR		(0x30)
@@ -63,9 +73,11 @@ uint32_t setAllMatrix(uint8_t pwmValue);
 #define REG_GLOBALCURRENT 0x01  // PG4
 #define REG_PULLDOWNUP 0x02     // PG4
 #define REG_RESET 0x3F          // PG4
+#define REG_PWMFREQ 0x36     	// PG4
 #define NORMAL_OPERATION 0x01	// normal operation 0b0000 0001
 #define SHUTDOWN_OPERATION 0x00	// software shutdown 0b0000 0000
 #define PULLUP_PULLDOWN 0x77	// pullup/pulldown setting/configuration 0b0111 0111 (32k)
+#define PWM_FREQUENCY 0x03		// 3.6kHz
 
 #ifndef TIMEOUT
 #    define TIMEOUT 100

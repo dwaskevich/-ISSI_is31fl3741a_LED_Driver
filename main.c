@@ -232,7 +232,7 @@ cy_rslt_t runEffects(void)
 	result = S31FL3741_setGlobalCurrent(0x00);
 
 	/* set all LEDs to max PWM value */
-	result = setAllMatrix(0xFF);
+	result = setAllMatrix();
 
 	/* fade in LEDs using global current control */
 	for(uint16_t i = 0; i < 256; i++)

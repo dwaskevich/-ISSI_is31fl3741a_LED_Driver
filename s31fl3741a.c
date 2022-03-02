@@ -3,6 +3,16 @@
  *
  *  Created on: Nov 12, 2021
  *      Author: waskevich
+ *
+ * Update 27-Feb-2022 (DJJW):
+ *		- added PWM frequency setup to initialization
+ *		- set PWM frequency to 3.6kHz (removes ghosting)
+ *
+ * Update 1-Mar-2022 (DJJW):
+ *		- fixed issue with writeGlobalScaling and writeGlobalLED
+ *		- added writeAllMatrix to allow for passing a PWM value
+ *		- updated S31FL3741_init to use clearAllMatrix to extinguish all LEDs
+ *
  */
 
 #include "s31fl3741a.h"
@@ -129,52 +139,66 @@ uint32_t readScaling(uint16_t ledPosition, uint8_t *scaleValue)
 	return result;
 }
 
-// Expects scaling buffer of size = MAX_LEDS. Starting address is automatically set to zero.
+// Expects scaling buffer (max size = MAX_LEDS). Starting address of each page is automatically set to zero.
 uint32_t writeGlobalScaling(uint8_t *buffer, uint16_t length)
 {
 	uint32_t result = 0;
+	uint8_t i2cBuffer[PAGE_ZERO_BOUNDARY + 1];
 
 	if(length <= MAX_LEDS)
 	{
-		// set starting address
-		uint8_t startingAddr = 0;
-		// select PAGE_SCALING_0 register and send starting address
-		result = S31FL3741_writeRegister(PAGE_SCALING_0, &startingAddr, 1, false);
-		// send data for lower area
-		result = S31FL3741_writeRegister(PAGE_SCALING_0, buffer, PAGE_ZERO_BOUNDARY, true);
+		i2cBuffer[0] = 0; /* set starting address to zero */
 
-		// select PAGE_SCALING_1 register and send starting address
-		result = S31FL3741_writeRegister(PAGE_SCALING_1, &startingAddr, 1, false);
-		// send data for upper area
-		result = S31FL3741_writeRegister(PAGE_SCALING_1, buffer, (MAX_LEDS - PAGE_ZERO_BOUNDARY), true);
+		/* copy PAGE0 buffer contents to local i2cBuffer */
+		for(uint8_t i = 0; i < PAGE_ZERO_BOUNDARY; i++)
+		{
+			i2cBuffer[i + 1] = buffer[i];
+		}
+		// select PAGE_SCALING_0 register and send starting address along with requested data
+		result = S31FL3741_writeRegister(PAGE_SCALING_0, i2cBuffer, PAGE_ZERO_BOUNDARY + 1, true);
+
+		/* copy PAGE1 buffer contents to local i2cBuffer */
+		for(uint8_t i = 0; i < (MAX_LEDS - PAGE_ZERO_BOUNDARY); i++)
+		{
+			i2cBuffer[i + 1] = buffer[i + PAGE_ZERO_BOUNDARY];
+		}
+		// select PAGE_SCALING_1 register and send starting address along with requested data
+		result = S31FL3741_writeRegister(PAGE_SCALING_1, i2cBuffer, (MAX_LEDS - PAGE_ZERO_BOUNDARY) + 1, true);
 	}
 	else result = 0xFFFF;
 
 	return result;
 }
 
-// Expects pwm buffer of size = MAX_LEDS. Starting address is automatically set to zero.
+// Expects pwm buffer (max size = MAX_LEDS). Starting address of each page is automatically set to zero.
 uint32_t writeGlobalLED(uint8_t *buffer, uint16_t length)
 {
 	uint32_t result = 0;
+	uint8_t i2cBuffer[PAGE_ZERO_BOUNDARY + 1];
 
-		if(length <= MAX_LEDS)
+	if(length <= MAX_LEDS)
+	{
+		i2cBuffer[0] = 0; /* set starting address to zero */
+
+		/* copy PAGE0 buffer contents to local i2cBuffer */
+		for(uint8_t i = 0; i < PAGE_ZERO_BOUNDARY; i++)
 		{
-			// set starting address
-			uint8_t startingAddr = 0;
-			// select PAGE_SCALING_0 register and send starting address
-			result = S31FL3741_writeRegister(PAGE_PWM0, &startingAddr, 1, false);
-			// send data for lower area
-			result = S31FL3741_writeRegister(PAGE_PWM0, buffer, PAGE_ZERO_BOUNDARY, true);
-
-			// select PAGE_SCALING_1 register and send starting address
-			result = S31FL3741_writeRegister(PAGE_PWM1, &startingAddr, 1, false);
-			// send data for upper area
-			result = S31FL3741_writeRegister(PAGE_PWM1, buffer, (MAX_LEDS - PAGE_ZERO_BOUNDARY), true);
+			i2cBuffer[i + 1] = buffer[i];
 		}
-		else result = 0xFFFF;
+		// select PAGE_PWM0 register and send starting address along with requested data
+		result = S31FL3741_writeRegister(PAGE_PWM0, i2cBuffer, PAGE_ZERO_BOUNDARY + 1, true);
 
-		return result;
+		/* copy PAGE1 buffer contents to local i2cBuffer */
+		for(uint8_t i = 0; i < (MAX_LEDS - PAGE_ZERO_BOUNDARY); i++)
+		{
+			i2cBuffer[i + 1] = buffer[i + PAGE_ZERO_BOUNDARY];
+		}
+		// select PAGE_PWM1 register and send starting address along with requested data
+		result = S31FL3741_writeRegister(PAGE_PWM1, i2cBuffer, (MAX_LEDS - PAGE_ZERO_BOUNDARY) + 1, true);
+	}
+	else result = 0xFFFF;
+
+	return result;
 }
 
 uint32_t writeLED(uint16_t ledPosition, uint8_t pwmValue)
@@ -248,6 +272,11 @@ uint32_t S31FL3741_init()
 	i2cBuffer[1] = PULLUP_PULLDOWN;
 	result = S31FL3741_writeRegister(PAGE_FUNCTION, i2cBuffer, 2, true);
 
+	// Set PWM Frequency
+	i2cBuffer[0] = REG_PWMFREQ;
+	i2cBuffer[1] = PWM_FREQUENCY;
+	result = S31FL3741_writeRegister(PAGE_FUNCTION, i2cBuffer, 2, true);
+
 	/* set scaling to 0xFF (max current/scaling) */
 	for(uint16_t i = 0; i < sizeof(ledMatrix); i++)
 	{
@@ -256,13 +285,8 @@ uint32_t S31FL3741_init()
 
 	result = writeGlobalScaling(ledMatrix, sizeof(ledMatrix));
 
-	/* set pwm buffer to zero (off) */
-	for(uint16_t i = 0; i < sizeof(ledMatrix); i++)
-	{
-		ledMatrix[i] = 0x00;
-	}
-
-	result = writeGlobalLED(ledMatrix, sizeof(ledMatrix));
+	/* extinguish all LEDs */
+	clearAllMatrix();
 
 	return result;
 }
@@ -283,7 +307,23 @@ uint32_t clearAllMatrix(void)
 	return result;
 }
 
-uint32_t setAllMatrix(uint8_t pwmValue)
+uint32_t setAllMatrix(void)
+{
+	uint32_t result;
+	uint8_t ledMatrix[MAX_LEDS];
+
+	/* set pwm values to requested value */
+	for(uint16_t i = 0; i < sizeof(ledMatrix); i++)
+	{
+		ledMatrix[i] = 0xff;
+	}
+
+	result = writeGlobalLED(ledMatrix, sizeof(ledMatrix));
+
+	return result;
+}
+
+uint32_t writeAllMatrix(uint8_t pwmValue)
 {
 	uint32_t result;
 	uint8_t ledMatrix[MAX_LEDS];
@@ -298,4 +338,3 @@ uint32_t setAllMatrix(uint8_t pwmValue)
 
 	return result;
 }
-
